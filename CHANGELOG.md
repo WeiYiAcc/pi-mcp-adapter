@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Enabled MCP elicitation on stock Pi releases by using the supported `select()` and `input()` UI dialogs instead of relying on a nonexistent `ctx.ui.form()` API.
+
 ## [2.9.0] - 2026-06-04
 
 ### Added

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { initializeMcp } from "../init.ts";
 
 const mocks = vi.hoisted(() => ({
   loadMcpConfig: vi.fn(),
@@ -26,9 +27,8 @@ describe("initializeMcp elicitation config", () => {
     mocks.loadMcpConfig.mockReturnValue({ mcpServers: {}, settings: {} });
   });
 
-  it("enables elicitation when UI is available", async () => {
-    const { initializeMcp } = await import("../init.ts");
-    const ui = { form: vi.fn(), confirm: vi.fn(), notify: vi.fn() };
+  it("enables elicitation with the stock Pi UI context", async () => {
+    const ui = { select: vi.fn(), input: vi.fn(), notify: vi.fn() };
 
     await initializeMcp({ getFlag: vi.fn() } as any, {
       cwd: "/tmp/project",
@@ -44,8 +44,6 @@ describe("initializeMcp elicitation config", () => {
   });
 
   it("does not enable elicitation without UI or when disabled in settings", async () => {
-    const { initializeMcp } = await import("../init.ts");
-
     await initializeMcp({ getFlag: vi.fn() } as any, {
       cwd: "/tmp/project",
       hasUI: false,
@@ -57,7 +55,7 @@ describe("initializeMcp elicitation config", () => {
     await initializeMcp({ getFlag: vi.fn() } as any, {
       cwd: "/tmp/project",
       hasUI: true,
-      ui: { form: vi.fn() },
+      ui: { select: vi.fn(), input: vi.fn(), notify: vi.fn() },
       modelRegistry: {},
     } as any);
     expect(mocks.managers[1].setElicitationConfig).not.toHaveBeenCalled();

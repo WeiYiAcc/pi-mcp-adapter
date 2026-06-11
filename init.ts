@@ -43,10 +43,7 @@ export async function initializeMcp(
       getSignal: () => ctx.signal,
     });
   }
-  const elicitationEnabled =
-    config.settings?.elicitation !== false &&
-    ctx.hasUI &&
-    typeof (ctx.ui as { form?: unknown }).form === "function";
+  const elicitationEnabled = config.settings?.elicitation !== false && ctx.hasUI;
   if (elicitationEnabled) {
     manager.setElicitationConfig({
       ui: ctx.ui as any,

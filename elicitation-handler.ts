@@ -9,80 +9,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import open from "open";
 
-export type ExtensionUIFormValue = string | number | boolean | string[] | undefined;
+type ElicitationValue = string | number | boolean | string[] | undefined;
+type SelectOption = { value: string; label?: string };
 
-export interface ExtensionUIFormSelectOption {
-  value: string;
-  label?: string;
-  description?: string;
-}
-
-export type ExtensionUIFormField =
-  | {
-      type: "text";
-      name: string;
-      label: string;
-      description?: string;
-      placeholder?: string;
-      required?: boolean;
-      defaultValue?: string;
-      minLength?: number;
-      maxLength?: number;
-      pattern?: string;
-    }
-  | {
-      type: "number" | "integer";
-      name: string;
-      label: string;
-      description?: string;
-      required?: boolean;
-      defaultValue?: number;
-      minimum?: number;
-      maximum?: number;
-    }
-  | {
-      type: "boolean";
-      name: string;
-      label: string;
-      description?: string;
-      defaultValue?: boolean;
-    }
-  | {
-      type: "select";
-      name: string;
-      label: string;
-      description?: string;
-      required?: boolean;
-      options: ExtensionUIFormSelectOption[];
-      defaultValue?: string;
-    }
-  | {
-      type: "multiSelect";
-      name: string;
-      label: string;
-      description?: string;
-      required?: boolean;
-      options: ExtensionUIFormSelectOption[];
-      defaultValue?: string[];
-    };
-
-export interface ExtensionUIFormRequest {
-  title: string;
-  message?: string;
-  fields: ExtensionUIFormField[];
-  submitLabel?: string;
-  secondaryLabel?: string;
-  cancelLabel?: string;
-}
-
-export type ExtensionUIFormResult =
-  | { action: "submit"; values: Record<string, ExtensionUIFormValue> }
-  | { action: "secondary" }
-  | { action: "cancel" };
-
-export interface ElicitationUIContext extends ExtensionUIContext {
-  form(request: ExtensionUIFormRequest): Promise<ExtensionUIFormResult>;
-}
+export type ElicitationUIContext = ExtensionUIContext;
 
 export interface ElicitationHandlerOptions {
   serverName: string;
@@ -113,14 +43,104 @@ export async function handleFormElicitation(
   options: ElicitationHandlerOptions,
   params: ElicitRequestFormParams,
 ): Promise<ElicitResult> {
-  const form = convertMcpSchemaToPiForm(options.serverName, params);
-  const result = await options.ui.form(form);
-  if (result.action !== "submit") {
-    return convertPiFormResultToMcpResult(result);
+  const decision = await options.ui.select(
+    `MCP Input Request\nServer: ${options.serverName}\n\n${params.message}`,
+    ["Continue", "Decline"],
+  );
+  if (decision === undefined) return { action: "cancel" };
+  if (decision === "Decline") return { action: "decline" };
+
+  const values: Record<string, ElicitationValue> = {};
+  const required = new Set(params.requestedSchema.required ?? []);
+
+  for (const [name, schema] of Object.entries(params.requestedSchema.properties)) {
+    const label = schema.title ?? humanizeName(name);
+    const title = [required.has(name) ? `${label} (required)` : label, schema.description]
+      .filter(Boolean)
+      .join("\n");
+
+    if (schema.type === "string" && ("enum" in schema || "oneOf" in schema)) {
+      const choices = "oneOf" in schema
+        ? schema.oneOf.map((option) => ({ display: formatChoice(option.const, option.title), value: option.const }))
+        : schema.enum.map((value, index) => ({
+            display: formatChoice(value, "enumNames" in schema ? schema.enumNames?.[index] : undefined),
+            value,
+          }));
+      const skip = required.has(name) ? undefined : uniqueActionLabel("Skip", choices.map((choice) => choice.display));
+      const selected = await options.ui.select(title, [
+        ...choices.map((choice) => choice.display),
+        ...(skip ? [skip] : []),
+      ]);
+      if (selected === undefined) return { action: "cancel" };
+      const value = selected === skip ? undefined : choices.find((choice) => choice.display === selected)?.value;
+      values[name] = validateFieldValue(params, name, schema, required.has(name), value);
+      continue;
+    }
+
+    if (schema.type === "boolean") {
+      const choices = ["Yes", "No"];
+      const skip = required.has(name) ? undefined : uniqueActionLabel("Skip", choices);
+      const selected = await options.ui.select(title, [...choices, ...(skip ? [skip] : [])]);
+      if (selected === undefined) return { action: "cancel" };
+      const value = selected === skip ? undefined : selected === "Yes";
+      values[name] = validateFieldValue(params, name, schema, required.has(name), value);
+      continue;
+    }
+
+    if (schema.type === "array") {
+      const choices = extractMultiSelectOptions(schema).map((option) => ({
+        display: formatChoice(option.value, option.label),
+        value: option.value,
+      }));
+      const selectedValues = new Set(schema.default ?? []);
+
+      while (true) {
+        const displays = choices.map((choice) =>
+          selectedValues.has(choice.value) ? `✓ ${choice.display}` : choice.display,
+        );
+        const done = uniqueActionLabel("Done", displays);
+        const selected = await options.ui.select(title, [...displays, done]);
+        if (selected === undefined) return { action: "cancel" };
+        if (selected === done) {
+          try {
+            values[name] = validateFieldValue(params, name, schema, required.has(name), [...selectedValues]);
+            break;
+          } catch (error) {
+            options.ui.notify(error instanceof Error ? error.message : String(error), "error");
+            continue;
+          }
+        }
+
+        const choice = choices[displays.indexOf(selected)];
+        if (!choice) continue;
+        if (selectedValues.has(choice.value)) selectedValues.delete(choice.value);
+        else selectedValues.add(choice.value);
+      }
+
+      continue;
+    }
+
+    const placeholder = schema.default === undefined ? undefined : String(schema.default);
+    while (true) {
+      const entered = await options.ui.input(title, placeholder);
+      if (entered === undefined) return { action: "cancel" };
+      const value = entered === "" && schema.default !== undefined ? schema.default : entered;
+      try {
+        values[name] = validateFieldValue(params, name, schema, required.has(name), value);
+        break;
+      } catch (error) {
+        options.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    }
   }
+
+  const submission = await options.ui.select(`Submit input to ${options.serverName}?`, ["Submit", "Decline"]);
+  if (submission === undefined) return { action: "cancel" };
+  if (submission === "Decline") return { action: "decline" };
+
   return {
     action: "accept",
-    content: coerceAndValidateFormValues(params, result.values),
+    content: coerceAndValidateFormValues(params, values),
   };
 }
 
@@ -130,9 +150,9 @@ export async function handleUrlElicitation(
 ): Promise<ElicitResult> {
   const browserUrl = getBrowserElicitationUrl(params.url);
   if (!options.autoOpenUrls) {
-    const result = await options.ui.form({
-      title: "MCP Browser Request",
-      message: [
+    const result = await options.ui.select(
+      [
+        "MCP Browser Request",
         `Server: ${options.serverName}`,
         "",
         params.message,
@@ -142,13 +162,10 @@ export async function handleUrlElicitation(
         "",
         "Open this URL in your browser?",
       ].join("\n"),
-      fields: [],
-      submitLabel: "Open",
-      secondaryLabel: "Decline",
-      cancelLabel: "Cancel",
-    });
-    if (result.action === "secondary") return { action: "decline" };
-    if (result.action === "cancel") return { action: "cancel" };
+      ["Open", "Decline"],
+    );
+    if (result === "Decline") return { action: "decline" };
+    if (result === undefined) return { action: "cancel" };
   }
 
   await open(browserUrl.toString());
@@ -156,95 +173,27 @@ export async function handleUrlElicitation(
   return { action: "accept" };
 }
 
-export function convertMcpSchemaToPiForm(
-  serverName: string,
+function validateFieldValue(
   params: ElicitRequestFormParams,
-): ExtensionUIFormRequest {
-  const required = new Set(params.requestedSchema.required ?? []);
-  return {
-    title: "MCP Input Request",
-    message: `Server: ${serverName}\n\n${params.message}`,
-    submitLabel: "Submit",
-    secondaryLabel: "Decline",
-    cancelLabel: "Cancel",
-    fields: Object.entries(params.requestedSchema.properties).map(([name, schema]): ExtensionUIFormField => {
-      const label = schema.title ?? humanizeName(name);
-      const base = {
-        name,
-        label,
-        description: schema.description,
-        required: required.has(name),
-      };
-
-      if (schema.type === "string" && "oneOf" in schema && Array.isArray(schema.oneOf)) {
-        return omitUndefined({
-          ...base,
-          type: "select" as const,
-          options: schema.oneOf.map((option) => ({ value: option.const, label: option.title })),
-          defaultValue: schema.default,
-        });
-      }
-
-      if (schema.type === "string" && "enum" in schema && Array.isArray(schema.enum)) {
-        const enumNames = "enumNames" in schema && Array.isArray(schema.enumNames) ? schema.enumNames : undefined;
-        return omitUndefined({
-          ...base,
-          type: "select" as const,
-          options: schema.enum.map((value, index) => omitUndefined({ value, label: enumNames?.[index] })),
-          defaultValue: schema.default,
-        });
-      }
-
-      if (schema.type === "array") {
-        return omitUndefined({
-          ...base,
-          type: "multiSelect" as const,
-          options: extractMultiSelectOptions(schema),
-          defaultValue: schema.default,
-        });
-      }
-
-      if (schema.type === "number" || schema.type === "integer") {
-        return omitUndefined({
-          ...base,
-          type: schema.type,
-          defaultValue: schema.default,
-          minimum: schema.minimum,
-          maximum: schema.maximum,
-        });
-      }
-
-      if (schema.type === "boolean") {
-        return omitUndefined({
-          type: "boolean" as const,
-          name,
-          label,
-          description: schema.description,
-          defaultValue: schema.default,
-        });
-      }
-
-      const stringSchema = schema as { default?: string; minLength?: number; maxLength?: number };
-      return omitUndefined({
-        ...base,
-        type: "text" as const,
-        defaultValue: stringSchema.default,
-        minLength: stringSchema.minLength,
-        maxLength: stringSchema.maxLength,
-      });
-    }),
-  };
-}
-
-export function convertPiFormResultToMcpResult(result: ExtensionUIFormResult): ElicitResult {
-  if (result.action === "secondary") return { action: "decline" };
-  if (result.action === "cancel") return { action: "cancel" };
-  return { action: "accept", content: stripUndefined(result.values) as ElicitResult["content"] };
+  name: string,
+  schema: ElicitRequestFormParams["requestedSchema"]["properties"][string],
+  required: boolean,
+  value: ElicitationValue,
+): ElicitationValue {
+  const fieldParams = {
+    ...params,
+    requestedSchema: {
+      type: "object",
+      properties: { [name]: schema },
+      ...(required ? { required: [name] } : {}),
+    },
+  } as ElicitRequestFormParams;
+  return coerceAndValidateFormValues(fieldParams, { [name]: value })[name];
 }
 
 export function coerceAndValidateFormValues(
   params: ElicitRequestFormParams,
-  values: Record<string, ExtensionUIFormValue>,
+  values: Record<string, ElicitationValue>,
 ): Record<string, string | number | boolean | string[]> {
   const output: Record<string, string | number | boolean | string[]> = {};
   const required = new Set(params.requestedSchema.required ?? []);
@@ -270,6 +219,9 @@ export function coerceAndValidateFormValues(
       }
       if ("oneOf" in schema && Array.isArray(schema.oneOf) && !schema.oneOf.some((option) => option.const === value)) {
         throw new Error(`Elicitation field ${name} is not an allowed value`);
+      }
+      if ("format" in schema && schema.format && !isValidStringFormat(value, schema.format)) {
+        throw new Error(`Elicitation field ${name} must be a valid ${schema.format}`);
       }
       output[name] = value;
       continue;
@@ -314,12 +266,41 @@ export function coerceAndValidateFormValues(
   return output;
 }
 
-function extractMultiSelectOptions(schema: Extract<ElicitRequestFormParams["requestedSchema"]["properties"][string], { type: "array" }>): ExtensionUIFormSelectOption[] {
+function extractMultiSelectOptions(schema: Extract<ElicitRequestFormParams["requestedSchema"]["properties"][string], { type: "array" }>): SelectOption[] {
   const items = schema.items as { enum?: string[]; anyOf?: Array<{ const: string; title: string }> };
   if (Array.isArray(items.anyOf)) {
     return items.anyOf.map((option) => ({ value: option.const, label: option.title }));
   }
   return (items.enum ?? []).map((value) => ({ value }));
+}
+
+function isValidStringFormat(value: string, format: "email" | "uri" | "date" | "date-time"): boolean {
+  if (format === "email") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+  if (format === "uri") {
+    try {
+      return Boolean(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  }
+  if (format === "date") {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+    if (!match) return false;
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    return date.toISOString().slice(0, 10) === value;
+  }
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)
+    && !Number.isNaN(Date.parse(value));
+}
+
+function formatChoice(value: string, label?: string): string {
+  return label && label !== value ? `${label} (${value})` : value;
+}
+
+function uniqueActionLabel(label: string, choices: string[]): string {
+  let result = label;
+  while (choices.includes(result)) result += "…";
+  return result;
 }
 
 function humanizeName(name: string): string {
@@ -335,19 +316,4 @@ function getBrowserElicitationUrl(url: string): URL {
     throw new Error(`MCP URL elicitation only supports http/https URLs: ${parsed.protocol}`);
   }
   return parsed;
-}
-
-function stripUndefined(values: Record<string, ExtensionUIFormValue>): Record<string, string | number | boolean | string[]> {
-  const output: Record<string, string | number | boolean | string[]> = {};
-  for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined) output[key] = value;
-  }
-  return output;
-}
-
-function omitUndefined<T extends Record<string, unknown>>(value: T): T {
-  for (const key of Object.keys(value)) {
-    if (value[key] === undefined) delete value[key];
-  }
-  return value;
 }
