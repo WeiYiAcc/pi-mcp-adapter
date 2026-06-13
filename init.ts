@@ -25,6 +25,10 @@ import { getMissingConfiguredDirectToolServers } from "./direct-tools.ts";
 
 const FAILURE_BACKOFF_MS = 60 * 1000;
 
+export function isTuiMode(ctx: Pick<ExtensionContext, "hasUI" | "mode">): boolean {
+  return ctx.hasUI && ctx.mode === "tui";
+}
+
 export async function initializeMcp(
   pi: ExtensionAPI,
   ctx: ExtensionContext
@@ -43,14 +47,11 @@ export async function initializeMcp(
       getSignal: () => ctx.signal,
     });
   }
-  const elicitationEnabled =
-    config.settings?.elicitation !== false &&
-    ctx.hasUI &&
-    typeof (ctx.ui as { form?: unknown }).form === "function";
+  const elicitationEnabled = config.settings?.elicitation !== false && ctx.hasUI;
   if (elicitationEnabled) {
     manager.setElicitationConfig({
-      ui: ctx.ui as any,
-      autoOpenUrls: config.settings?.elicitationAutoOpenUrls === true,
+      ui: ctx.ui,
+      allowUrl: isTuiMode(ctx),
     });
   }
   const lifecycle = new McpLifecycleManager(manager);

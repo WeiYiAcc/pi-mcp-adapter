@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Implemented MCP form elicitation with stock Pi dialogs, including validation and review/edit before submission.
+- Added consent-based URL elicitation, URL-required tool error handling, and completion notifications.
+- Kept RPC sessions form-only so browser navigation occurs only in TUI mode.
+
 ## [2.9.0] - 2026-06-04
 
 ### Added
