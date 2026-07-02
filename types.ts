@@ -328,6 +328,17 @@ export interface McpSettings {
   samplingAutoApprove?: boolean;
   elicitation?: boolean;
   /**
+   * Guard oversized MCP tool/resource output before it is returned to the model.
+   * Defaults to true. Set to false to restore raw MCP output behavior.
+   */
+  outputGuard?: boolean;
+  /** Maximum inline MCP output bytes before truncation/spill-to-disk. Defaults to 50 KiB. */
+  outputMaxBytes?: number;
+  /** Maximum inline MCP output lines before truncation/spill-to-disk. Defaults to 2000. */
+  outputMaxLines?: number;
+  /** Maximum details.mcpResult JSON bytes before replacing raw details with a summary. Defaults to 16 KiB. */
+  detailsMaxBytes?: number;
+  /**
    * Message returned in tool results when a server needs (re-)authentication.
    * "${server}" is substituted with the server name. Defaults to a TUI
    * instruction when unset.

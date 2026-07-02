@@ -57,6 +57,7 @@
     "elicitation-handler.ts",
     "tool-registrar.ts",
     "tool-result-renderer.ts",
+    "mcp-output-guard.ts",
     "resource-tools.ts",
     "lifecycle.ts",
     "metadata-cache.ts",
