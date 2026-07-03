@@ -833,6 +833,7 @@ export async function executeCall(
   }
 
   let uiSession: UiSessionRuntime | null = null;
+  const requestOptions = state.manager.getRequestOptions?.(serverName, signal) ?? (signal ? { signal } : undefined);
 
   const outputGuardOptions = resolveMcpOutputGuardOptions(state.config.settings);
 
@@ -841,7 +842,7 @@ export async function executeCall(
     state.manager.incrementInFlight(serverName);
 
     if (toolMeta.resourceUri) {
-      const result = await connection.client.readResource({ uri: toolMeta.resourceUri }, { signal });
+      const result = await connection.client.readResource({ uri: toolMeta.resourceUri }, requestOptions);
       const content = (result.contents ?? []).map(c => ({
         type: "text" as const,
         text: "text" in c ? c.text : ("blob" in c ? `[Binary data: ${(c as { mimeType?: string }).mimeType ?? "unknown"}]` : JSON.stringify(c)),
@@ -867,7 +868,7 @@ export async function executeCall(
       name: toolMeta.originalName,
       arguments: args ?? {},
       _meta: uiSession?.requestMeta,
-    }, undefined, { signal });
+    }, undefined, requestOptions);
 
     if (toolMeta.uiResourceUri) {
       const result = await abortable(resultPromise, signal);
